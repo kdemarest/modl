@@ -1,0 +1,5 @@
+newmtl CubeMaterial
+
+Kd 1.0 1.0 1.0
+map_Kd cube_tx.png
+map_Bump cube_normal.png

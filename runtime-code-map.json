@@ -1,0 +1,31 @@
+{
+  "project": "modl",
+  "generatedAt": "2026-09-12T19:38:08Z",
+  "bundlePath": ".obsidian/plugins/modl/main.js",
+  "entries": [
+    {
+      "sourcePath": "modl/vendor/three.min.js",
+      "sourceStartLine": 1,
+      "bundleStartLine": 1,
+      "bundleEndLine": 7
+    },
+    {
+      "sourcePath": "modl/aa-three-bind.js",
+      "sourceStartLine": 1,
+      "bundleStartLine": 9,
+      "bundleEndLine": 29
+    },
+    {
+      "sourcePath": "modl/main.js",
+      "sourceStartLine": 1,
+      "bundleStartLine": 31,
+      "bundleEndLine": 90
+    },
+    {
+      "sourcePath": "modl/test-view.js",
+      "sourceStartLine": 1,
+      "bundleStartLine": 92,
+      "bundleEndLine": 770
+    }
+  ]
+}
