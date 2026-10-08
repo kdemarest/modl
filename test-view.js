@@ -47,14 +47,19 @@ MODL.TestView = class extends MODL.obsidian.ItemView {
     showSuccess(message) {
         this.statusText = message || "Success";
         if (this.statusEl) {
-            this.statusEl.setText(this.statusText);
+            this.statusEl.setText(this.sceneError || this.statusText);
         }
-        this.ensureThreeScene().catch(error => {
-            const detail = error instanceof Error ? error.message : String(error);
-            if (this.statusEl) {
-                this.statusEl.setText(`MODL test failed: ${detail}`);
-            }
-        });
+        this.ensureThreeScene().catch(error => this.reportSceneError(error));
+    }
+
+    // Keep a scene failure visible; a later success message must not hide it.
+    reportSceneError(error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.sceneError = `MODL test failed: ${detail}`;
+        if (this.statusEl) {
+            this.statusEl.setText(this.sceneError);
+        }
+        this.plugin.reportError("building the 3D test scene", error);
     }
 
     render() {
@@ -88,25 +93,11 @@ MODL.TestView = class extends MODL.obsidian.ItemView {
         this.statusEl.style.fontSize = "0.85em";
         this.statusEl.style.zIndex = "3";
 
-        this.ensureThreeScene().catch(error => {
-            const detail = error instanceof Error ? error.message : String(error);
-            if (this.statusEl) {
-                this.statusEl.setText(`MODL test failed: ${detail}`);
-            }
-        });
+        this.ensureThreeScene().catch(error => this.reportSceneError(error));
     }
 
     getThree() {
-        if (MODL.THREE) {
-            return MODL.THREE;
-        }
-
-        if (typeof globalThis !== "undefined" && globalThis.THREE) {
-            MODL.THREE = globalThis.THREE;
-            return MODL.THREE;
-        }
-
-        return null;
+        return MODL.THREE || null;
     }
 
     updateOrbitCamera() {

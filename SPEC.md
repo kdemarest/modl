@@ -1246,3 +1246,20 @@ The same generated mesh and UVs must work in:
 * WebView / Three.js preview
 * OBJ export
 * Unity
+
+---
+
+## Implemented
+
+### Failure and logging contracts
+
+- Catastrophic failures are fail-loud: MODL shows a blocking, full-screen error surface and logs details to `console.error()`.
+- The error surface identifies the operation, shows the message and the stack when available, and stays until the user taps Clear. It never auto-dismisses and a later refresh or success message must not hide it.
+- The error surface includes a Copy action that copies operation + full error detail for sharing/debug.
+- Every asynchronous entry point (command callbacks, view open/scene build) has an explicit error boundary that routes to the plugin's single `reportError(context, error)`.
+- Each plugin load appends a run marker to `modl/modl.log`: a blank line, the run date/time, and another blank line.
+- Reported runtime errors append timestamp, operation, message, and stack (when available) to `modl/modl.log`.
+- Reported runtime errors also overwrite `modl/_lastErr.log` with the latest failure payload, including project identity (`modl`), error type (`runtime`), timestamp, operation, bundle location, source location, and detail.
+- Build emits `modl/runtime-code-map.json` (bundle line ranges -> source file ranges); runtime error reporting uses it to include mapped source file/line/column in `modl/_lastErr.log` when a bundle stack location is available (desktop `main.js:L:C` or mobile `plugin:modl:L:C` frames).
+- Failure to write a log goes to `console.error()` and never recursively triggers error reporting.
+- Logs are written only inside `modl/`, never to the vault root, and are ignored by Git.
