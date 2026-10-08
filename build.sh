@@ -13,9 +13,11 @@ echo "Writing build output to $BUILD_LOG"
 
 THREE_VERSION="0.160.0"
 THREE_VENDOR_DIR="./vendor"
-THREE_VENDOR_PATH="$THREE_VENDOR_DIR/three.min.js"
+THREE_VENDOR_PATH="$THREE_VENDOR_DIR/three.js"
 THREE_LICENSE_PATH="$THREE_VENDOR_DIR/LICENSE-three.txt"
-THREE_MIN_URL="https://unpkg.com/three@${THREE_VERSION}/build/three.min.js"
+# Unminified on purpose: r160 three.min.js has a minifier bug (TDZ "Cannot access 'D'")
+# in WebGLRenderer when rendering lit materials.
+THREE_URL="https://unpkg.com/three@${THREE_VERSION}/build/three.js"
 THREE_LICENSE_URL="https://unpkg.com/three@${THREE_VERSION}/LICENSE"
 
 if ! command -v node >/dev/null 2>&1; then
@@ -46,7 +48,7 @@ fetch_file() {
 
 if [ ! -s "$THREE_VENDOR_PATH" ]; then
   echo "Vendoring Three.js r$THREE_VERSION ..."
-  fetch_file "$THREE_MIN_URL" "$THREE_VENDOR_PATH"
+  fetch_file "$THREE_URL" "$THREE_VENDOR_PATH"
 fi
 
 if [ ! -s "$THREE_LICENSE_PATH" ]; then
