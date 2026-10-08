@@ -1,0 +1,9 @@
+{
+  "id": "modl",
+  "name": "Modl",
+  "version": "0.0.1",
+  "minAppVersion": "1.11.4",
+  "description": "Modl project tools and test view.",
+  "author": "Ken Demarest",
+  "isDesktopOnly": false
+}
