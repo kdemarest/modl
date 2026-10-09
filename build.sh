@@ -55,9 +55,11 @@ if [ ! -s "$THREE_LICENSE_PATH" ]; then
   fetch_file "$THREE_LICENSE_URL" "$THREE_LICENSE_PATH"
 fi
 
+# _preamble.js (unit/runUnits) goes first; every other file is a unit, so their order is irrelevant.
 mapfile -t ROOT_JS_FILES < <(
   find . -maxdepth 1 -type f -name '*.js' \
     ! -name "$(basename "$STAGING_BUNDLE_PATH")" \
+    ! -name '_preamble.js' \
     | sort
 )
 
@@ -66,7 +68,7 @@ if [ "${#ROOT_JS_FILES[@]}" -eq 0 ]; then
   exit 1
 fi
 
-JS_FILES=("$THREE_VENDOR_PATH" "${ROOT_JS_FILES[@]}")
+JS_FILES=("./_preamble.js" "$THREE_VENDOR_PATH" "${ROOT_JS_FILES[@]}")
 
 : > "$STAGING_BUNDLE_PATH"
 CURRENT_LINE=1
@@ -109,6 +111,9 @@ EOF
   CURRENT_LINE=$((CURRENT_LINE + SOURCE_LINES + 1))
 done
 
+# Run every unit now that the whole bundle has loaded.
+printf 'runUnits();\n' >> "$STAGING_BUNDLE_PATH"
+
 GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > "$MAP_PATH" <<EOF
 {
@@ -128,14 +133,8 @@ fi
 
 echo "Fast syntax check passed."
 
-SMOKE_SCRIPT="${MODL_SMOKE_SCRIPT:-./smoke.sh}"
-if [[ ! -f "$SMOKE_SCRIPT" ]]; then
-  echo "Build failed: smoke script not found at $SMOKE_SCRIPT" >&2
-  exit 1
-fi
-bash "$SMOKE_SCRIPT" "$STAGING_BUNDLE_PATH"
-
-echo "Smoke test passed."
+# Load test: construct the plugin and run onload/onunload against a fake Obsidian.
+node ../tools/jsload.js "$STAGING_BUNDLE_PATH" modl
 
 cp "$STAGING_BUNDLE_PATH" "$BUNDLE_PATH"
 

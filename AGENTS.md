@@ -9,9 +9,7 @@ Quick context (always load):
 - {#include SPEC.md#Overview}
 
 Full-read policy for editing modl:
-- Read full ARCH.md for architecture, plugin-load behavior, candidate-view lifecycle, runtime boundaries, or generation/review flow changes.
-- Read full SPEC.md for required behavior, tool contracts, failure policy, test/validation expectations, or Implemented tracking changes.
-- If scope is unclear or quick context is insufficient, read both full files before editing.
+- Read full SPEC.md for scope and asset format; PLAN.md for the planned modeling language.
 
 Core rules:
 - Make only the requested change.
@@ -20,12 +18,11 @@ Core rules:
 - Keep code Android-compatible with Obsidian mobile.
 - Use Obsidian APIs, not Node/Electron APIs.
 - Never expose, log, or store API keys outside Obsidian SecretStorage.
-- Dependency graph creation must have exactly one implementation path in gptviz; all dependency features must query that shared graph instead of rebuilding parallel graph logic.
-- Update SPEC.md Implemented as needed; do not edit Planned unless explicitly requested.
+- Code is the source of truth for implemented behavior; do not describe it in docs. Edit PLAN.md only when asked.
 
 Scripts and build workflow:
 - Assume all .sh scripts run from cwd = modl/.
-- let's the user run build.sh, not you
+- Run build.sh after code changes so the user can test.
 
 Vault visibility constraint:
 - The vault has a plugin that allows opening/editing arbitrary extensions.
