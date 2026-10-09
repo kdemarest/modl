@@ -1,3 +1,4 @@
+unit("error-modal", [], () => {
 globalThis.MODL = globalThis.MODL || {};
 
 MODL.obsidian = MODL.obsidian || require("obsidian");
@@ -58,6 +59,7 @@ MODL.ErrorModal = class extends MODL.obsidian.Modal {
                 detail
             ].join("\n");
 
+            // Clipboard support varies by WebView: try the API, then execCommand; the Notice reports the outcome.
             let copied = false;
 
             try {
@@ -65,7 +67,9 @@ MODL.ErrorModal = class extends MODL.obsidian.Modal {
                     await navigator.clipboard.writeText(payload);
                     copied = true;
                 }
-            } catch (error) {}
+            } catch (error) {
+                // clipboard API refused; try the execCommand fallback
+            }
 
             if (!copied) {
                 try {
@@ -78,7 +82,9 @@ MODL.ErrorModal = class extends MODL.obsidian.Modal {
                     textarea.select();
                     copied = document.execCommand("copy");
                     textarea.remove();
-                } catch (error) {}
+                } catch (error) {
+                    // fallback failed too; the Notice below says so
+                }
             }
 
             new MODL.obsidian.Notice(
@@ -116,3 +122,4 @@ MODL.ErrorModal = class extends MODL.obsidian.Modal {
         this.contentEl.empty();
     }
 };
+});

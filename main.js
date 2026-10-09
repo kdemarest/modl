@@ -1,3 +1,4 @@
+unit("plugin", ["three"], () => {
 globalThis.MODL = globalThis.MODL || {};
 
 MODL.obsidian = MODL.obsidian || require("obsidian");
@@ -212,23 +213,21 @@ MODL.Plugin = class extends MODL.obsidian.Plugin {
 
         await workspace.revealLeaf(leaf);
 
-        if (leaf.view instanceof MODL.TestView) {
-            return leaf.view;
+        if (!(leaf.view instanceof MODL.TestView)) {
+            throw new Error(`Test view leaf holds a ${leaf.view.getViewType()} view.`);
         }
 
-        return null;
+        return leaf.view;
     }
 
     async runTestAction() {
         const view = await this.openTestView();
         const message = "MODL test success.";
-
-        if (view && typeof view.showSuccess === "function") {
-            view.showSuccess(message);
-        }
+        view.showSuccess(message);
 
         new MODL.obsidian.Notice(message);
     }
 };
 
 module.exports = MODL.Plugin;
+});

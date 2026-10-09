@@ -1,3 +1,4 @@
+unit("test-view", [], () => {
 globalThis.MODL = globalThis.MODL || {};
 
 MODL.obsidian = MODL.obsidian || require("obsidian");
@@ -620,42 +621,28 @@ MODL.TestView = class extends MODL.obsidian.ItemView {
         this.pointerUpHandler = null;
 
         if (this.mesh) {
-            if (this.mesh.geometry && typeof this.mesh.geometry.dispose === "function") {
-                this.mesh.geometry.dispose();
-            }
-            if (this.mesh.material) {
-                if (Array.isArray(this.mesh.material)) {
-                    this.mesh.material.forEach(item => item && typeof item.dispose === "function" && item.dispose());
-                } else if (typeof this.mesh.material.dispose === "function") {
-                    this.mesh.material.dispose();
-                }
-            }
+            this.mesh.geometry.dispose();
+            this.mesh.material.dispose();
             this.mesh = null;
         }
 
-        if (this.loadedMaterial && typeof this.loadedMaterial.dispose === "function") {
+        if (this.loadedMaterial) {
             this.loadedMaterial.dispose();
         }
         this.loadedMaterial = null;
 
         for (const texture of this.loadedTextures) {
-            if (texture && typeof texture.dispose === "function") {
-                texture.dispose();
-            }
+            texture.dispose();
         }
         this.loadedTextures = [];
 
         for (const url of this.loadedTextureUrls) {
-            try {
-                URL.revokeObjectURL(url);
-            } catch (error) {}
+            URL.revokeObjectURL(url);
         }
         this.loadedTextureUrls = [];
 
         if (this.renderer) {
-            if (typeof this.renderer.dispose === "function") {
-                this.renderer.dispose();
-            }
+            this.renderer.dispose();
             this.renderer = null;
         }
 
@@ -668,3 +655,4 @@ MODL.TestView = class extends MODL.obsidian.ItemView {
         this.contentEl.empty();
     }
 };
+});
