@@ -1,0 +1,27 @@
+// Abstract Mana: a tall octahedron (its base at y = 0, its equator at 0.5, its top at 1) with one
+// horizontal stripe above the middle. The stripe is measured up the mesh's own Y, so it runs
+// straight across all four upper faces whatever their triangles; its edges are smoothed over
+// about a pixel so they don't shimmer.
+Shader "Canopy/Modl/Mana"
+
+Properties
+{
+	_BaseColor ("Base Color", Color) = (0.37, 0.47, 0.56, 1)
+	_StripeColor ("Stripe Color", Color) = (0.43, 0.67, 0.71, 1)
+	_StripeY ("Stripe Center Y", Float) = 0.75
+	_StripeHeight ("Stripe Height", Float) = 0.075
+	_Glossiness ("Smoothness", Range(0, 1)) = 0.4
+	_Glow ("Glow", Range(0, 1)) = 0.25
+}
+
+void surface(SurfIn s, inout SurfOut o)
+{
+	float y = s.objPos.y;
+	float w = fwidth(y);
+	float lo = _StripeY - _StripeHeight * 0.5;
+	float hi = _StripeY + _StripeHeight * 0.5;
+	float band = smoothstep(lo - w, lo + w, y) - smoothstep(hi - w, hi + w, y);
+	o.albedo = lerp(_BaseColor.rgb, _StripeColor.rgb, band);
+	o.emission = o.albedo * _Glow;
+	o.gloss = _Glossiness;
+}

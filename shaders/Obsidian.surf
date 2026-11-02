@@ -1,0 +1,25 @@
+// Obsidian: black volcanic glass. Nearly black, with a tight bright highlight from the sun and a
+// sky reflection that grows toward grazing angles (Fresnel), so its flat facets flash as it
+// turns. No cubemap: the reflected sky is a gradient from _GroundColor below to _SkyColor above.
+Shader "Canopy/Modl/Obsidian"
+
+Properties
+{
+	_BaseColor ("Base Color", Color) = (0.06, 0.055, 0.075, 1)
+	_SkyColor ("Reflected Sky", Color) = (0.55, 0.62, 0.72, 1)
+	_GroundColor ("Reflected Ground", Color) = (0.08, 0.07, 0.06, 1)
+	_Reflect ("Reflection", Range(0, 1)) = 0.6
+	_Glossiness ("Smoothness", Range(0, 1)) = 0.95
+	_Specular ("Highlight", Range(0, 4)) = 2
+}
+
+void surface(SurfIn s, inout SurfOut o)
+{
+	float3 r = reflect(-s.viewDir, s.worldNormal);
+	float3 sky = lerp(_GroundColor.rgb, _SkyColor.rgb, smoothstep(-0.2, 0.4, r.y));
+	float fresnel = 0.04 + 0.96 * pow(1.0 - saturate(dot(s.worldNormal, s.viewDir)), 5.0);
+	o.albedo = _BaseColor.rgb;
+	o.gloss = _Glossiness;
+	o.specular = _Specular;
+	o.emission = sky * fresnel * _Reflect;
+}

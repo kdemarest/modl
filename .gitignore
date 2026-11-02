@@ -45,3 +45,14 @@ runtime-code-map.json
 
 # Canopy caches (tools/)
 cache/
+obj/.cache/
+__pycache__/
+
+# Built by obj/<family>.py (and obj/preview.py): rebuilt from the scripts and docs specs
+obj/*_LOD[0-9].obj
+obj/*_tx.png
+obj/*_normal.png
+obj/*_preview.png
+/obj/BannerWarCollege.mtl
+/obj/CurvedBench.mtl
+/obj/Hut.mtl

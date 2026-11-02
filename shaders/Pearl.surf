@@ -1,0 +1,30 @@
+// Glowing pearl (the Divers Guild Hall keystones). The placeholder is an ico60 (triakis
+// icosahedron, 60 flat faces, 0.6 across: its middle at y = 0.255); _Round 1 shades it as the
+// sphere around _Center, so it reads round, 0 shows its facets. A soft highlight, a nacre sheen
+// that shifts from _SheenA face-on to _SheenB toward the rim, and a glow of its own.
+Shader "Canopy/Modl/Pearl"
+
+Properties
+{
+	_BaseColor ("Base Color", Color) = (0.86, 0.84, 0.8, 1)
+	_SheenA ("Sheen Face-on", Color) = (1, 0.9, 0.93, 1)
+	_SheenB ("Sheen At Rim", Color) = (0.72, 0.86, 1, 1)
+	_Sheen ("Sheen Strength", Range(0, 1)) = 0.35
+	_Center ("Sphere Center", Vector) = (0, 0.255, 0, 0)
+	_Round ("Round", Range(0, 1)) = 1
+	_Glossiness ("Smoothness", Range(0, 1)) = 0.55
+	_Specular ("Highlight", Range(0, 2)) = 0.6
+	_Glow ("Glow", Range(0, 1)) = 0.3
+}
+
+void surface(SurfIn s, inout SurfOut o)
+{
+	float3 n = normalize(lerp(s.worldNormal, ObjectToWorldNormal(normalize(s.objPos - _Center.xyz)), _Round));
+	float rim = 1.0 - saturate(dot(n, s.viewDir));
+	float3 sheen = lerp(_SheenA.rgb, _SheenB.rgb, rim * rim);
+	o.normal = n;
+	o.albedo = _BaseColor.rgb;
+	o.gloss = _Glossiness;
+	o.specular = _Specular;
+	o.emission = _BaseColor.rgb * _Glow + sheen * _Sheen * rim;
+}

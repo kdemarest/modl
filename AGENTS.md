@@ -1,4 +1,4 @@
-{#include ../canvid/SharedProjects.md}
+{#include ../vids/SharedProjects.md}
 
 Asset workspace:
 - obj/ holds Wavefront OBJ/MTL outputs, their texture/normal PNG atlases, and the procedural generation scripts used to produce them.
