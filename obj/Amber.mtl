@@ -1,0 +1,4 @@
+newmtl ModlAmber
+Kd 1 1 1
+map_Kd Amber_tx.png
+map_Bump Amber_normal.png

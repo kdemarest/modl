@@ -7,7 +7,11 @@ with one JSON reply per stdout line (anything the script prints goes to stderr).
 modl.py are reloaded when they change, so edits to them apply to the next request. Values are in
 each tag's own unit ({benchDepth 1.5 m}: 1.5).
   {"op": "vars"}                -> {"family", "assets": [names], "vars": [{name, value, unit,
-                                    step, min, max, geometry, textures, rebuild}], "watch": [the
+                                    step, min, max, geometry, textures, rebuild, live}], "uses": {asset:
+                                    [the vars it uses, for a carried piece's list]}, "shaders":
+                                    [{"material": guid, "name"}: the family's SHADERS, each
+                                    material's live vars grouped in layout's list under one row,
+                                    <name>Shaders], "watch": [the
                                     spec doc, the script, modl.py: a change to one calls for a
                                     write with no values, a rebuild from the doc]}
   {"op": "meshes", "values"}    -> {"meshes": {model name: {v, n, uv, f}}, "lods": {asset:
@@ -16,9 +20,16 @@ each tag's own unit ({benchDepth 1.5 m}: 1.5).
                                     triangle indices (OBJ's right-handed axes), each asset's
                                     LODGroup, and "anchors": {asset: {ring}} for assets whose
                                     pivot sits `ring` m from a ring's center along their +Z
-  {"op": "textures", "values"}  -> {"map": png path, "normal": png path}: preview atlases
+  {"op": "textures", "values"}  -> {"map": png path, "normal": png path, "more": [{"assets",
+                                    "map", "normal"}]}: preview atlases (more: the atlases of
+                                    those assets that have their own, the family's more_textures)
   {"op": "write", "values"}     -> {"doc": changed, "written": [Canopy paths]}: the values into
                                     the doc's tags, then the full build installed into Canopy
+A live var's "live" lists what it sets, on materials by guid (layout applies them as the drag
+goes, asking nothing): [{"material", "property": "_NormalStrength", "_Glossiness" or
+"_Brightness", "scale"?} (the value itself, or times scale), {"material", "tiling": k} (the detail texture's tiling k / value), {"material",
+"strength": s, "mean": m} (the detail texture baked at strength s, its linear mean m: at value
+v it is 1 + v / s (d - 1), and the color m / (1 - v / s (1 - m)) brighter)].
 Errors reply {"error": message}.
 """
 
@@ -59,19 +70,29 @@ class Family:
         return self.module
 
 
+def step(m, name, t):
+    """A var's drag step: its own (modl.Var's step), else its tag's (modl.step_of)."""
+    return min(getattr(m.VARS.get(name), "step", None) or 1e9, modl.step_of(t[name][0], t[name][1]))
+
+
 def vars_reply(m):
     t = m.tags()
+    live = m.live(m.values()) if hasattr(m, "live") else {}
     out = []
     for name, var in sorted(m.VARS.items()):
         value, unit = t[name]
         per = modl.UNITS[unit]
         out.append({
-            "name": name, "value": value, "unit": unit, "step": modl.step_of(value, unit),
+            "name": name, "value": value, "unit": unit, "step": step(m, name, t),
             "min": None if var.min is None else var.min / per, "max": None if var.max is None else var.max / per,
             "geometry": var.geometry, "textures": var.textures, "rebuild": var.rebuild,
+            "live": live.get(name) if getattr(var, "live", False) else None,
         })
     watch = [os.path.abspath(m.DOC), os.path.abspath(m.__file__), os.path.join(HERE, "modl.py")]
-    return {"family": m.FAMILY, "assets": [b.name for b in m.assets(m.values())], "vars": out, "watch": watch}
+    names = [b.name for b in m.assets(m.values())]
+    uses = m.uses(m.values(), live) if hasattr(m, "uses") else {}
+    shaders = [{"material": modl.material_guid(m.FAMILY, k), "name": n} for k, n in getattr(m, "SHADERS", {}).items()]
+    return {"family": m.FAMILY, "assets": names, "vars": out, "watch": watch, "uses": uses, "shaders": shaders}
 
 
 def handle(fam, req):
@@ -90,10 +111,16 @@ def handle(fam, req):
         paths = {"map": os.path.join(out, m.FAMILY + "_tx.png"), "normal": os.path.join(out, m.FAMILY + "_normal.png")}
         modl.write_png(paths["map"], color, level=1)
         modl.write_png(paths["normal"], normal, level=1)
+        paths["more"] = []
+        for k, (assets, c, n) in enumerate(m.more_textures(m.values(values)) if hasattr(m, "more_textures") else []):
+            more = {"assets": assets, "map": os.path.join(out, f"{m.FAMILY}_more{k}_tx.png"), "normal": os.path.join(out, f"{m.FAMILY}_more{k}_normal.png")}
+            modl.write_png(more["map"], c, level=1)
+            modl.write_png(more["normal"], n, level=1)
+            paths["more"].append(more)
         return paths
     if op == "write":
         t = m.tags()
-        steps = {n: modl.step_of(t[n][0], t[n][1]) for n in values}
+        steps = {n: step(m, n, t) for n in values if n in t}
         changed = modl.write_tags(m.DOC, m.HEADING, {n: float(x) for n, x in values.items() if n in t}, steps)
         written = m.build(m.values(), True, report=lambda s: print(s, file=sys.stderr))
         return {"doc": changed, "written": written}

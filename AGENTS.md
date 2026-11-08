@@ -4,6 +4,7 @@ Asset workspace:
 - obj/ holds Wavefront OBJ/MTL outputs, their texture/normal PNG atlases, and the procedural generation scripts used to produce them.
 - Keep each atlas next to its .mtl; MTL map_Kd/map_Bump paths resolve relative to the .mtl file.
 - Do not scaffold further subfolders under obj/ unless explicitly requested by the user.
+- When a model stops using a normal-map generator, move its code into obj/normals.py (or, for a change of parameters only, record the old parameters there); never just delete it (Ken, 2026-11-04).
 
 Quick context (always load):
 - {#include SPEC.md#Overview}

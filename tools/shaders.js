@@ -2,7 +2,7 @@
 // working tree:
 //   node tools/shaders.js          writes Assets/Shaders/Modl (cwd = modl/)
 //   node tools/shaders.js --dry    checks every .surf and lists what it would write
-// For each <Name>.surf: <Name>.shader (Canopy/General's lighting around the surface function) and
+// For each <Name>.surf: <Name>.shader (the surface function lit by Canopy's CanopyLighting.cginc) and
 // Modl<Name>.mat (the shader with its default property values; prefixed, as Canopy already has
 // materials such as Obsidian.mat, and Shape lines name materials by file), each with a .meta whose guid comes
 // from its path, so rerunning keeps references. This script owns the folder: files it no longer
@@ -20,8 +20,9 @@
 // layout (layout/web/surface.js) draws the same function as GLSL, read from the .shader between
 // the MODL SURFACE markers, so it keeps to what both languages share: write float literals with a
 // point (1.0, never 1), no mul(), textures, semantics, static or #directives. Each shader is
-// compiled (glslangValidator, pkg glslang) against stand-ins for UnityCG.cginc before anything is
-// written.
+// compiled (glslangValidator, pkg glslang) against stand-ins for UnityCG.cginc, with the Canopy
+// tree's CanopyLighting.cginc, before anything is written; layout's tools/shader-check.js checks
+// them against Unity's own include files.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -107,16 +108,7 @@ ${s.properties.map(p => '\t\t' + p.line).join('\n')}
 			#pragma target 3.0
 
 			#include "UnityCG.cginc"
-
-			// Canopy's shader globals (ShaderVars.cs)
-			uniform float  _DimAltitude;
-			uniform float  _DimAmount;
-			uniform float  _DimDepth;
-			uniform float  _HeadUnder;
-			uniform float4 _FogColorLinear;
-			uniform float  _FogDensitySquared;
-			uniform float4 _SunColor;
-			uniform float3 _SunDirection;
+			#include "../CanopyLighting.cginc"
 
 ${s.properties.map(p => `\t\t\t${uniformType[p.type]} ${p.name};`).join('\n')}
 
@@ -144,35 +136,20 @@ ${s.properties.map(p => `\t\t\t${uniformType[p.type]} ${p.name};`).join('\n')}
 			// MODL SURFACE BEGIN
 ${tabs(3, s.code)}			// MODL SURFACE END
 
-			// Canopy/General's lighting (one sun, ambient, Blinn-Phong gloss), underwater dimming
-			// and exp2 fog, plus the surface's emission, which the sun and dimming leave alone.
-			// layout/web/surface.js has the same in GLSL.
-			float4 CanopyLight(SurfIn s, SurfOut o)
+			// Canopy's lighting (CanopyLighting.cginc: one sun, ambient, General's highlight, the
+			// darkening below the sea before it, exp2 fog after), plus the surface's emission, which the
+			// sun and darkening leave alone. layout/web/surface.js has the same in GLSL.
+			float4 ModlLight(SurfIn s, SurfOut o)
 			{
-				float3 albedo = o.albedo;
-				if (!_HeadUnder && s.worldPos.y < _DimAltitude)
-				{
-					float depthRatio = (_DimAltitude - s.worldPos.y) / max(_DimDepth, 1e-5);
-					albedo *= _DimAmount * saturate(1.0 - depthRatio);
-				}
-				float3 L = normalize(_SunDirection.xyz);
-				float3 H = normalize(L + s.viewDir);
-				float3 N = normalize(o.normal);
-				float3 diffuse = max(dot(N, L), 0.0) * albedo;
-				float ndoth = max(dot(N, H), 0.0);
-				float n2 = ndoth * ndoth;
-				float n8 = n2 * n2 * n2 * n2;
-				float n64 = n8 * n8 * n8 * n8 * n8 * n8 * n8 * n8;
-				float specTerm = o.gloss == 0 ? 0 : lerp(n8, n64, o.gloss);
-				float3 specular = specTerm * o.specular * _SunColor.rgb * o.gloss;
-				float3 lit = UNITY_LIGHTMODEL_AMBIENT.rgb * albedo + diffuse + specular + o.emission;
-				if (_HeadUnder || s.worldPos.y >= _DimAltitude)
-				{
-					float3 d = _WorldSpaceCameraPos - s.worldPos;
-					float f = exp2(-_FogDensitySquared * dot(d, d));
-					lit = lerp(_FogColorLinear.rgb, lit, saturate(f));
-				}
-				return float4(lit, o.alpha);
+				CanopySurface c;
+				c.albedo = CanopyDim(o.albedo, s.worldPos);
+				c.normal = normalize(o.normal);
+				c.gloss = o.gloss;
+				c.specular = o.specular;
+				c.emission = o.emission;
+				c.worldPos = s.worldPos;
+				float3 d = _WorldSpaceCameraPos - s.worldPos;
+				return float4(CanopyFog(CanopyLight(c), s.worldPos, dot(d, d), 1), o.alpha);
 			}
 
 			struct appdata
@@ -180,6 +157,7 @@ ${tabs(3, s.code)}			// MODL SURFACE END
 				float4 vertex : POSITION;
 				float3 normal : NORMAL;
 				float2 uv     : TEXCOORD0;
+				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
 
 			struct v2f
@@ -190,11 +168,15 @@ ${tabs(3, s.code)}			// MODL SURFACE END
 				float3 wPos      : TEXCOORD2;
 				float3 wNormal   : TEXCOORD3;
 				float2 uv        : TEXCOORD4;
+				UNITY_VERTEX_OUTPUT_STEREO // Multiview: both eyes in one pass
 			};
 
 			v2f vert(appdata v)
 			{
 				v2f o;
+				UNITY_SETUP_INSTANCE_ID(v);
+				UNITY_INITIALIZE_OUTPUT(v2f, o);
+				UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
 				o.pos = UnityObjectToClipPos(v.vertex);
 				o.objPos = v.vertex.xyz;
 				o.objNormal = v.normal;
@@ -222,7 +204,7 @@ ${tabs(3, s.code)}			// MODL SURFACE END
 				o.normal = s.worldNormal;
 				o.alpha = 1;
 				surface(s, o);
-				return CanopyLight(s, o);
+				return ModlLight(s, o);
 			}
 			ENDCG
 		}
@@ -236,7 +218,12 @@ ${tabs(3, s.code)}			// MODL SURFACE END
 // Compiles a generated shader's vertex and fragment programs as HLSL; throws with the errors.
 const UNITY_CG = `float4x4 unity_ObjectToWorld; float4x4 UNITY_MATRIX_VP; float3 _WorldSpaceCameraPos; float4 _Time; float4 UNITY_LIGHTMODEL_AMBIENT;
 float4 UnityObjectToClipPos(float4 v) { return mul(UNITY_MATRIX_VP, mul(unity_ObjectToWorld, v)); }
-float3 UnityObjectToWorldNormal(float3 n) { return normalize(mul((float3x3)unity_ObjectToWorld, n)); }`;
+float3 UnityObjectToWorldNormal(float3 n) { return normalize(mul((float3x3)unity_ObjectToWorld, n)); }
+#define UNITY_VERTEX_INPUT_INSTANCE_ID
+#define UNITY_VERTEX_OUTPUT_STEREO
+#define UNITY_SETUP_INSTANCE_ID(v)
+#define UNITY_INITIALIZE_OUTPUT(type, o) o = (type)0;
+#define UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o)`;
 function compile(text, label) {
   const program = /CGPROGRAM([\s\S]*?)ENDCG/.exec(text)[1].replace(/^\s*#pragma.*$/gm, '').replace('#include "UnityCG.cginc"', UNITY_CG);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modl-shader-'));
@@ -244,7 +231,7 @@ function compile(text, label) {
     fs.writeFileSync(path.join(dir, 'shader.hlsl'), program);
     for (const stage of ['vert', 'frag']) {
       try {
-        execFileSync('glslangValidator', ['-V', '-D', '-e', stage, '-S', stage, 'shader.hlsl', '-o', stage + '.spv'], { cwd: dir, stdio: 'pipe' });
+        execFileSync('glslangValidator', ['-V', '-D', '-e', stage, '-S', stage, '-I' + path.join(REPO, 'Assets', 'Shaders', 'Modl'), 'shader.hlsl', '-o', stage + '.spv'], { cwd: dir, stdio: 'pipe' });
       } catch (error) {
         const out = String(error.stdout || '') + String(error.stderr || '') || error.message;
         throw new Error(`${label} (${stage}) doesn't compile:\n${out.split('\n').filter(l => /ERROR|error/.test(l)).join('\n') || out}`, { cause: error });

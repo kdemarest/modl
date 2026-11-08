@@ -13,7 +13,9 @@ Python stdlib only.
   `# Modl` section in the docs (SPEC.md).
 """
 
+import contextlib
 import hashlib
+import json
 import math
 import os
 import random
@@ -22,6 +24,8 @@ import struct
 import subprocess
 import zlib
 from array import array
+
+import numpy as np
 
 CANOPY = os.environ.get("CANOPY", "/sdcard/Canopy")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,10 +42,14 @@ TAG = re.compile(r"\{([A-Za-z]\w*) (-?\d+(?:\.\d+)?)(?: ([^{}\s]+))?\}")
 
 class Var:
     """How a script uses a tweakvar: whether a change reshapes the geometry, redoes the
-    textures, or needs a full rebuild (new assets or a new stone); its limits in the tag's unit."""
+    textures, needs a full rebuild (new assets or a new stone), or is live: it sets only its
+    materials' properties, which layout shows at once (the family's live(values) says how); its
+    limits in the tag's unit; its step, where step_of's (a unit's, or 1 for none) is too coarse:
+    a shader's property, such as a normal strength of 1, wants hundredths."""
 
-    def __init__(self, geometry=False, textures=False, rebuild=False, min=None, max=None):
-        self.geometry, self.textures, self.rebuild, self.min, self.max = geometry, textures, rebuild, min, max
+    def __init__(self, geometry=False, textures=False, rebuild=False, live=False, min=None, max=None, step=None):
+        self.geometry, self.textures, self.rebuild, self.live, self.min, self.max = geometry, textures, rebuild, live, min, max
+        self.step = step
 
 
 def section(doc, heading):
@@ -86,6 +94,195 @@ def check_sources(doc, heading, used):
         raise ValueError(f"'# {heading}' in {os.path.relpath(doc, DOCS)} needs Source lines for: {', '.join(missing)}")
 
 
+class Reads(dict):
+    """A family's values (a dict) that notes which of them are read, so a model made from them
+    can be cached by the values it used (made); and which it reads itself (own: not while quiet,
+    as packing islands reads every part's sizes), by asset while asset is set (a texture's
+    painter's), for Tweak's list of a carried piece's vars."""
+    def __init__(self, values):
+        super().__init__(values)
+        self.read, self.own, self.by, self.quiet, self.asset = set(), set(), {}, 0, None
+
+    def __getitem__(self, name):
+        self.read.add(name)
+        if not self.quiet:
+            self.own.add(name)
+            self.by.setdefault(self.asset or "", set()).add(name)
+        return super().__getitem__(name)
+
+
+@contextlib.contextmanager
+def quiet(values):
+    """Reads of values (if a Reads) in it aren't the reader's own (see Reads)."""
+    if isinstance(values, Reads):
+        values.quiet += 1
+    try:
+        yield
+    finally:
+        if isinstance(values, Reads):
+            values.quiet -= 1
+
+
+def kept(key, make):
+    """make(), kept on disk (.cache/kept/) by key, a JSON-able description of everything it
+    depends on (its sources' paths with their modification times, its settings), so slow reads
+    (ImageMagick's, a photo's tile) are made once across runs and workers."""
+    import pickle
+    name = hashlib.sha1(json.dumps(key, sort_keys=True, default=str).encode()).hexdigest()
+    path = os.path.join(CACHE, "kept", name + ".pkl")
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    except (OSError, EOFError, pickle.UnpicklingError):
+        pass
+    value = make()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}"
+    with open(tmp, "wb") as f:
+        pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(tmp, path)
+    return value
+
+
+def note_texture_uses(family, atlas, by):
+    """Keeps which vars each asset's textures read (by: {asset or "": vars}, "" for reads outside
+    any asset's), in .cache/<family>_uses.json by atlas, for Tweak's vars (texture_uses)."""
+    path = os.path.join(CACHE, f"{family}_uses.json")
+    try:
+        saved = json.load(open(path))
+    except (OSError, ValueError):
+        saved = {}
+    saved[atlas] = {k: sorted(x) for k, x in by.items()}
+    os.makedirs(CACHE, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(saved, f)
+
+
+def texture_uses(family):
+    """note_texture_uses' record, {atlas: {asset or "": [vars]}} ({} before any textures run)."""
+    try:
+        return json.load(open(os.path.join(CACHE, f"{family}_uses.json")))
+    except (OSError, ValueError):
+        return {}
+
+
+def model_uses(name):
+    """The vars a model read itself when last made (made's), or None."""
+    hit = _made.get(name)
+    return hit[2] if hit else None
+
+
+_painted = {}  # an island painter's name -> (the values it read, as (name, value) pairs, its regions, its own reads)
+_tasks = []  # the painters a paint_islands is running, for its forked workers
+
+
+def _region(img, rect, pad):
+    """The pixels of rect and its padding (clipped to img): (x, y, numpy copy)."""
+    x0, y0, w, h = rect
+    xa, ya, xb, yb = max(0, x0 - pad), max(0, y0 - pad), min(img.w, x0 + w + pad), min(img.h, y0 + h + pad)
+    return xa, ya, img.np()[ya:yb, xa:xb].copy()
+
+
+def _paint(i, color, normal, values, pad):
+    """Runs painter i of _tasks on color and normal: (the values it read as pairs, its own reads,
+    its regions [(x, y, color pixels, normal pixels)])."""
+    name, asset, fn = _tasks[i]
+    reads = Reads(values)
+    reads.asset = asset
+    rects = fn(color, normal, reads)
+    regions = [(x, y, c, _region(normal, rect, pad)[2]) for rect in rects for x, y, c in [_region(color, rect, pad)]]
+    return tuple((k, dict.__getitem__(values, k)) for k in reads.read), {k: set(x) for k, x in reads.by.items()}, regions
+
+
+def _paint_forked(i):
+    return _paint(i, *_forked)
+
+
+def forked(fn, items, workers=None):
+    """[fn(item) for item in items], each in a forked child (one a core at a time), its result
+    pickled back through a pipe. (multiprocessing's Pool took seconds to shut down here.)"""
+    import pickle
+    import select
+    workers = workers or os.cpu_count() or 1
+    results, running, todo = [None] * len(items), {}, list(enumerate(items))
+    while todo or running:
+        while todo and len(running) < workers:
+            k, item = todo.pop(0)
+            r, w = os.pipe()
+            pid = os.fork()
+            if pid == 0:  # the child
+                os.close(r)
+                try:
+                    data = pickle.dumps((True, fn(item)), protocol=pickle.HIGHEST_PROTOCOL)
+                except BaseException as error:  # noqa: BLE001 - sent back, raised in the parent
+                    data = pickle.dumps((False, f"{type(error).__name__}: {error}"))
+                with os.fdopen(w, "wb") as out:
+                    out.write(data)
+                os._exit(0)
+            os.close(w)
+            running[r] = (k, pid, [])
+        ready, _, _ = select.select(list(running), [], [])
+        for r in ready:
+            chunk = os.read(r, 1 << 20)
+            if chunk:
+                running[r][2].append(chunk)
+                continue
+            k, pid, chunks = running.pop(r)
+            os.close(r)
+            os.waitpid(pid, 0)
+            ok, value = pickle.loads(b"".join(chunks))
+            if not ok:
+                raise RuntimeError(f"a forked painter failed: {value}")
+            results[k] = value
+    return results
+
+
+def paint_islands(color, normal, tasks, values, pad=8):
+    """Paints an atlas's islands (Ken, 2026-11-04: the toolchain's speed is the game's): tasks
+    [(name, asset, painter)], each painter(color, normal, values) painting its islands, only
+    within them and their pad, and returning their rects; its reads are asset's (Reads). A
+    painter is run again only when a value it read has changed (else its last regions are put
+    back), and those that run do so in forked workers, one a core. Returns the reads by asset
+    ({asset: vars}, for note_texture_uses)."""
+    global _tasks, _forked
+    misses = [i for i, (name, _, _) in enumerate(tasks)
+              if not (name in _painted and all(k in values and values[k] == x for k, x in _painted[name][0]))]
+    _tasks, _forked = tasks, (color, normal, values, pad)
+    if len(misses) > 1:
+        done = forked(_paint_forked, misses)
+    else:
+        done = [_paint(i, color, normal, values, pad) for i in misses]
+    _tasks, _forked = [], None
+    for i, result in zip(misses, done):
+        _painted[tasks[i][0]] = result
+    by = {}
+    for name, _, _ in tasks:
+        _, own, regions = _painted[name]
+        for x, y, c, n in regions:
+            color.np()[y:y + c.shape[0], x:x + c.shape[1]] = c
+            normal.np()[y:y + n.shape[0], x:x + n.shape[1]] = n
+        for k, x in own.items():
+            by.setdefault(k, set()).update(x)
+    return by
+
+
+_forked = None
+_made = {}  # a model's name -> (the values it read, as (name, value) pairs, what made it, those it read itself)
+
+
+def made(name, make, values):
+    """make(values) for a model, again only when a value it read last time has changed, so
+    Tweak's drag on one var remakes only the models that use it (Ken, 2026-11-04: leaf curl
+    should move in near real time; remaking every model took about a second)."""
+    hit = _made.get(name)
+    if hit and all(k in values and values[k] == x for k, x in hit[0]):
+        return hit[1]
+    reads = Reads(values)
+    out = make(reads)
+    _made[name] = (tuple((k, dict.__getitem__(values, k)) for k in reads.read), out, set(reads.own))
+    return out
+
+
 def unused_tags(tags, declared):
     return [n for n in tags if n not in declared]
 
@@ -118,8 +315,13 @@ def write_tags(doc, heading, values, steps):
 
 def step_of(value, unit):
     """A drag's step for a value in a unit: a centimeter, a tenth of a millimeter-scale unit,
-    half a degree, a pixel, one."""
-    return {"m": 0.01, "cm": 0.1, "mm": 1, "deg": 0.5, "px/m": 1, "px": 0.1, "": 1}.get(unit, 0.01)
+    half a degree, a pixel, one; but never coarser than a hundredth of the value's own size (two
+    figures), so a small value (a strength of 0.12, a thread of 1.5 mm) isn't rounded away when
+    it is written (Ken, 2026-11-04: Tweak had written them as 0 and 2 mm)."""
+    step = {"m": 0.01, "cm": 0.1, "mm": 1, "deg": 0.5, "px/m": 1, "px": 0.1, "": 1}.get(unit, 0.01)
+    if value and float(value) != int(value):
+        step = min(step, 10.0 ** (math.floor(math.log10(abs(value))) - 1))
+    return step
 
 
 def mesh_json(mesh):
@@ -140,8 +342,19 @@ class Image:
 
     def __init__(self, w, h, fill=(0.0, 0.0, 0.0, 1.0)):
         self.w, self.h = w, h
-        self.px = array("f", list(fill) * (w * h))
+        self.px = array("f")
+        self.px.frombytes(np.tile(np.array(fill, np.float32), w * h).tobytes())
         self.unit = 1.0
+
+    def copy(self):
+        out = Image(1, 1)
+        out.w, out.h, out.px, out.unit = self.w, self.h, array(self.px.typecode, self.px), self.unit
+        return out
+
+    def np(self):
+        """Its pixels as a numpy array, rows by columns by 4, sharing them (float32, or uint8 as
+        read from a PNG: times unit)."""
+        return np.asarray(memoryview(self.px)).reshape(self.h, self.w, 4)
 
     def get(self, x, y):
         i = (y * self.w + x) * 4
@@ -180,6 +393,14 @@ def read_png(data):
     if depth != 8 or interlace or ctype not in (2, 6):
         raise ValueError("only 8-bit RGB or RGBA, not interlaced")
     bpp = 4 if ctype == 6 else 3
+    try:  # ImageMagick unfilters far faster than Python
+        rows = bytearray(subprocess.run(["magick", "png:-", "-depth", "8", "RGBA:-"], input=data, check=True, capture_output=True).stdout)
+        if len(rows) == w * h * 4:
+            img = Image(1, 1)
+            img.w, img.h, img.px, img.unit = w, h, array("B", rows), 1 / 255
+            return img
+    except (OSError, subprocess.CalledProcessError):
+        pass
     raw = zlib.decompress(b"".join(idat))
     stride = w * bpp
     rows, prev = bytearray(h * stride), bytearray(stride)
@@ -213,16 +434,13 @@ def read_png(data):
     return img
 
 
-def write_png(path, img, alpha=False, level=9):
+def write_png(path, img, alpha=False, level=6):
+    """img as a PNG, its values rounded to bytes, zlib level 6 (9 took far longer for a few
+    percent: Ken, 2026-11-04, lighter compression)."""
     bpp = 4 if alpha else 3
-    raw = bytearray()
-    for y in range(img.h):
-        raw.append(0)
-        row = img.px[y * img.w * 4:(y + 1) * img.w * 4]
-        for x in range(img.w):
-            for k in range(bpp):
-                v = row[x * 4 + k] * img.unit
-                raw.append(0 if v <= 0 else 255 if v >= 1 else int(v * 255 + 0.5))
+    v = img.np()[:, :, :bpp].astype(np.float64) * img.unit
+    rows = np.clip(np.floor(v * 255 + 0.5), 0, 255).astype(np.uint8).reshape(img.h, img.w * bpp)
+    raw = np.concatenate([np.zeros((img.h, 1), np.uint8), rows], axis=1).tobytes()
 
     def chunk(tag, body):
         return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
@@ -764,10 +982,11 @@ Transform:
 {lod_doc}""" + "".join(insts)
 
 
-def material_yaml(template, name, tex_guid, normal_guid, detail_scale=None):
+def material_yaml(template, name, tex_guid, normal_guid, detail_scale=None, detail_guid=None, floats=None):
     """A Canopy material from another's text: its name, color and normal textures replaced,
     its detail textures' tiling set (u, v), or with no detail_scale its detail textures dropped
-    (cloth wants no rock grain)."""
+    (cloth wants no rock grain); with detail_guid, its detail texture that one (a family's own);
+    floats ({property: value}, e.g. _Glossiness) set."""
     out, prop = [], None
     for line in template.split("\n"):
         s = line.strip()
@@ -775,13 +994,16 @@ def material_yaml(template, name, tex_guid, normal_guid, detail_scale=None):
             continue
         if s.startswith("m_Name: "):
             line = line[:line.index("m_Name: ")] + "m_Name: " + name
+        key = s[2:s.index(":")] if s.startswith("- _") and ": " in s else None
+        if floats and key in floats:
+            line = line[:line.index("- _")] + f"- {key}: {floats[key]:g}"
         if s.startswith("- _"):
             prop = s[2:].rstrip(":")
         elif prop and prop.startswith("_Detail") and s.startswith("m_Texture: ") and detail_scale is None:
             # before the texture swap below, which would keep a detail texture unchanged
             line = line[:line.index("m_Texture:")] + "m_Texture: {fileID: 0}"
         elif prop and s.startswith("m_Texture: {fileID: 2800000"):
-            g = tex_guid if prop == "_MainTex" else normal_guid if prop in ("_BumpMap", "_NormalMap") else None
+            g = tex_guid if prop == "_MainTex" else normal_guid if prop in ("_BumpMap", "_NormalMap") else detail_guid if prop == "_DetailTex" else None
             if g:
                 line = line[:line.index("m_Texture:")] + f"m_Texture: {{fileID: 2800000, guid: {g}, type: 3}}"
         elif prop and prop.startswith("_Detail") and s.startswith("m_Scale: ") and detail_scale is not None:
@@ -790,26 +1012,51 @@ def material_yaml(template, name, tex_guid, normal_guid, detail_scale=None):
     return "\n".join(out)
 
 
-def install_assets(family, material, assets, material_text, color_meta_from, normal_meta_from):
+def material_guid(family, material):
+    """The guid of a family's installed material, for an asset that has one of its own."""
+    return guid_of(f"Assets/Modl/{family}/{material}.mat")
+
+
+def material_files(family, atlas, material, material_text, color_meta_from, normal_meta_from, detail_meta_from=None, detail=None):
+    """One material's files in Assets/Modl/<family>/: the atlases <atlas>_tx.png and
+    <atlas>_normal.png from obj/ (and, with detail_meta_from, its detail texture
+    <detail>_detail.png, detail atlas unless given, so materials can share an atlas but not
+    their detail), their metas copied from Canopy textures of the same kind, and
+    <material>.mat: material_text(color guid, normal guid[, detail guid])."""
+    base = f"Assets/Modl/{family}"
+    tex, nrm, det = (f"{base}/{n}_{k}.png" for n, k in ((atlas, "tx"), (atlas, "normal"), (detail or atlas, "detail")))
+    mat = f"{base}/{material}.mat"
+    read = lambda name: open(os.path.join(HERE, name), "rb").read()
+    files = {
+        tex: read(atlas + "_tx.png"),
+        tex + ".meta": meta_with_guid(canopy_file(color_meta_from + ".meta").decode(), guid_of(tex)),
+        nrm: read(atlas + "_normal.png"),
+        nrm + ".meta": meta_with_guid(canopy_file(normal_meta_from + ".meta").decode(), guid_of(nrm)),
+        mat: material_text(guid_of(tex), guid_of(nrm), *([guid_of(det)] if detail_meta_from else [])),
+        mat + ".meta": f"fileFormatVersion: 2\nguid: {guid_of(mat)}\nNativeFormatImporter:\n  externalObjects: {{}}\n  mainObjectFileID: 2100000\n  userData: \n  assetBundleName: \n  assetBundleVariant: \n",
+    }
+    if detail_meta_from:
+        files[det] = read((detail or atlas) + "_detail.png")
+        files[det + ".meta"] = meta_with_guid(canopy_file(detail_meta_from + ".meta").decode(), guid_of(det))
+    return files
+
+
+def install_assets(family, material, assets, material_text, color_meta_from, normal_meta_from, detail_meta_from=None, more=()):
     """Installs a family into Canopy's Assets/Modl/<family>/: its atlases from obj/ (with texture
     metas copied from Canopy textures of the same kind), its material (material_text, made with
-    material_yaml), and each asset's LOD models and prefab. assets: objects with name, lods
-    (Meshes), size, heights and optionally material (a guid of its own). Returns the paths
-    changed."""
+    material_yaml; see material_files), and each asset's LOD models and prefab. assets: objects
+    with name, lods (Meshes), size, heights and optionally material (a guid of its own, e.g.
+    material_guid's). more: further materials, each a tuple of material_files' arguments after
+    family. Returns the paths changed."""
     base = f"Assets/Modl/{family}"
-    tex, nrm, mat = f"{base}/{family}_tx.png", f"{base}/{family}_normal.png", f"{base}/{material}.mat"
+    mat = f"{base}/{material}.mat"
     obj_meta = canopy_file("Assets/Meshes/Drill/mesh_Cone_5sided.obj.meta").decode()
     # the prefab sets the material; the model brings none of its own
     obj_meta = obj_meta.replace("materialImportMode: 2", "materialImportMode: 0")
     read = lambda name: open(os.path.join(HERE, name), "rb").read()
-    files = {
-        tex: read(family + "_tx.png"),
-        tex + ".meta": meta_with_guid(canopy_file(color_meta_from + ".meta").decode(), guid_of(tex)),
-        nrm: read(family + "_normal.png"),
-        nrm + ".meta": meta_with_guid(canopy_file(normal_meta_from + ".meta").decode(), guid_of(nrm)),
-        mat: material_text(guid_of(tex), guid_of(nrm)),
-        mat + ".meta": f"fileFormatVersion: 2\nguid: {guid_of(mat)}\nNativeFormatImporter:\n  externalObjects: {{}}\n  mainObjectFileID: 2100000\n  userData: \n  assetBundleName: \n  assetBundleVariant: \n",
-    }
+    files = material_files(family, family, material, material_text, color_meta_from, normal_meta_from, detail_meta_from)
+    for m in more:
+        files.update(material_files(family, *m))
     for a in assets:
         models = []
         for mesh in a.lods:
