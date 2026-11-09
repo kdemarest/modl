@@ -223,7 +223,13 @@ float3 UnityObjectToWorldNormal(float3 n) { return normalize(mul((float3x3)unity
 #define UNITY_VERTEX_OUTPUT_STEREO
 #define UNITY_SETUP_INSTANCE_ID(v)
 #define UNITY_INITIALIZE_OUTPUT(type, o) o = (type)0;
-#define UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o)`;
+#define UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o)
+// instancing (Canopy's lights keep each renderer's slots in an instanced property: CanopyLighting.cginc;
+// Claude, 2026-11-09: without these every modl shader stopped compiling here)
+#define UNITY_INSTANCING_BUFFER_START(name) cbuffer name {
+#define UNITY_DEFINE_INSTANCED_PROP(type, var) type var;
+#define UNITY_INSTANCING_BUFFER_END(name) };
+#define UNITY_ACCESS_INSTANCED_PROP(buffer, var) var`;
 function compile(text, label) {
   const program = /CGPROGRAM([\s\S]*?)ENDCG/.exec(text)[1].replace(/^\s*#pragma.*$/gm, '').replace('#include "UnityCG.cginc"', UNITY_CG);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modl-shader-'));

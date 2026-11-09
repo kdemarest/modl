@@ -1,17 +1,43 @@
-// Abstract Mana: a tall octahedron (its base at y = 0, its equator at 0.5, its top at 1) with one
-// horizontal stripe above the middle. The stripe is measured up the mesh's own Y, so it runs
-// straight across all four upper faces whatever their triangles; its edges are smoothed over
-// about a pixel so they don't shimmer.
+// Abstract Mana: a tall octahedron (its base at y = 0, its equator at half its height, 0.5 for the
+// 1 m model) with one horizontal stripe just above the middle (docs/models/Abstract Mana.md, after
+// vids/Mana.png). A mottled glowing cyan: deep teal mottling from a noise in the mesh's own space
+// (so it stays on the stone as it turns), the ridges where faces meet glowing toward the stripe's
+// cyan, as the sample's edges do (measured as how far across its face a point is, so the line stays
+// thin up to the points), all of it lit from within (glow). The stripe is measured up the mesh's own Y, so it runs
+// straight across all four upper faces whatever their triangles; its edges are smoothed over about a
+// pixel so they don't shimmer. (Claude, 2026-11-09: was a flat grey-blue, its stripe three quarters up.)
 Shader "Canopy/Modl/Mana"
 
 Properties
 {
-	_BaseColor ("Base Color", Color) = (0.37, 0.47, 0.56, 1)
-	_StripeColor ("Stripe Color", Color) = (0.43, 0.67, 0.71, 1)
-	_StripeY ("Stripe Center Y", Float) = 0.75
-	_StripeHeight ("Stripe Height", Float) = 0.075
-	_Glossiness ("Smoothness", Range(0, 1)) = 0.4
-	_Glow ("Glow", Range(0, 1)) = 0.25
+	_BaseColor ("Base Color", Color) = (0.10, 0.58, 0.70, 1)
+	_DeepColor ("Mottling Color", Color) = (0.01, 0.10, 0.15, 1)
+	_StripeColor ("Stripe Color", Color) = (0.55, 0.97, 1.0, 1)
+	_StripeY ("Stripe Center Y", Float) = 0.53
+	_StripeHeight ("Stripe Height", Float) = 0.06
+	_MottleScale ("Mottling Scale", Float) = 11.0
+	_MottleAmount ("Mottling Amount", Range(0, 1)) = 0.8
+	_EdgeWidth ("Ridge Width (across a face)", Range(0, 0.5)) = 0.07
+	_EdgeGlow ("Ridge Glow", Range(0, 1)) = 0.85
+	_Glossiness ("Smoothness", Range(0, 1)) = 0.5
+	_Glow ("Glow", Range(0, 1)) = 0.5
+}
+
+// value noise, about 0 to 1, smooth between the integer lattice's hashed corners
+float manaHash(float3 p)
+{
+	return frac(sin(dot(p, float3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+float manaNoise(float3 p)
+{
+	float3 i = floor(p);
+	float3 f = frac(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float a = lerp(manaHash(i), manaHash(i + float3(1.0, 0.0, 0.0)), f.x);
+	float b = lerp(manaHash(i + float3(0.0, 1.0, 0.0)), manaHash(i + float3(1.0, 1.0, 0.0)), f.x);
+	float c = lerp(manaHash(i + float3(0.0, 0.0, 1.0)), manaHash(i + float3(1.0, 0.0, 1.0)), f.x);
+	float d = lerp(manaHash(i + float3(0.0, 1.0, 1.0)), manaHash(i + float3(1.0, 1.0, 1.0)), f.x);
+	return lerp(lerp(a, b, f.y), lerp(c, d, f.y), f.z);
 }
 
 void surface(SurfIn s, inout SurfOut o)
@@ -21,7 +47,17 @@ void surface(SurfIn s, inout SurfOut o)
 	float lo = _StripeY - _StripeHeight * 0.5;
 	float hi = _StripeY + _StripeHeight * 0.5;
 	float band = smoothstep(lo - w, lo + w, y) - smoothstep(hi - w, hi + w, y);
-	o.albedo = lerp(_BaseColor.rgb, _StripeColor.rgb, band);
+	// mottling: three octaves, then pushed apart so the teal clouds have edges
+	float3 p = s.objPos * _MottleScale;
+	float n = manaNoise(p) * 0.55 + manaNoise(p * 2.03) * 0.3 + manaNoise(p * 4.01) * 0.15;
+	n = smoothstep(0.35, 0.75, n);
+	float3 body = lerp(_BaseColor.rgb, _DeepColor.rgb, n * _MottleAmount);
+	// the ridges: where x or z is near 0, as a share of the way across the face
+	float ax = abs(s.objPos.x);
+	float az = abs(s.objPos.z);
+	float ridge = 1.0 - smoothstep(0.0, _EdgeWidth, min(ax, az) / max(ax + az, 0.000001));
+	body = lerp(body, _StripeColor.rgb, ridge * _EdgeGlow);
+	o.albedo = lerp(body, _StripeColor.rgb, band);
 	o.emission = o.albedo * _Glow;
 	o.gloss = _Glossiness;
 }
