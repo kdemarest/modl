@@ -52,13 +52,13 @@ Claude's proposal (2026-11-02), for Ken to revise. A family's models are placed 
 
 ## In Canopy
 
-- `--write` installs a family into `Assets/Modl/<Family>/` in the Canopy working tree, which modl owns and rewrites: each `<Name>.obj` (Unity's model importer), the two atlases (texture importer; the normal atlas as a normal map, U and V repeat), `Modl<Family>.mat` on Canopy/General made from an existing Canopy material the script names (its textures replaced, its detail tiling scaled to the same density, or the family's own detail texture tiled to its meters), any further materials the same way (`install_assets`' `more`), and `<Name>.prefab`: the models nested under an empty root, with the material, and a LODGroup on the root drawing model k as level k. Guids come from file paths, so reruns keep every reference. Never committed; the folder is logged once in `docs/Canopy Changes.md`.
+- `--write` installs a family into `Assets/Modl/<Family>/` in the Canopy working tree, which modl owns and rewrites: each `<Name>.obj` (Unity's model importer), the two atlases (texture importer; the normal atlas as a normal map, U and V repeat), `Modl<Family>.mat` on Canopy/General made from an existing Canopy material the script names (its textures replaced, its detail tiling scaled to the same density, or the family's own detail texture tiled to its meters), any further materials the same way (`install_assets`' `more`), and `<Name>.prefab`: the models nested under an empty root, with the material, and a LODGroup on the root drawing model k as level k. Guids come from file paths, so reruns keep every reference. Never committed; the folder is logged once in `docs/code/Canopy Changes.md`.
 - Colliders are not written yet.
 
 ## Shaders
 
 - An asset may use a surface shader instead of (or as well as) atlases: `shaders/<Name>.surf`, a Unity Properties block plus `void surface(SurfIn s, inout SurfOut o)` in the HLSL that GLSL shares. Format and rules: `tools/shaders.js`.
-- `node tools/shaders.js` writes `Assets/Shaders/Modl/<Name>.shader` (the function lit by Canopy's `CanopyLighting.cginc`, with Multiview's stereo macros) and `Modl<Name>.mat` into the Canopy working tree; it owns that folder. Log the change in `docs/Canopy Changes.md`.
+- `node tools/shaders.js` writes `Assets/Shaders/Modl/<Name>.shader` (the function lit by Canopy's `CanopyLighting.cginc`, with Multiview's stereo macros) and `Modl<Name>.mat` into the Canopy working tree; it owns that folder. Log the change in `docs/code/Canopy Changes.md`.
 - layout draws the same function from the `.shader` (between its `MODL SURFACE` markers) with matching lighting, so the shader, not a texture, is the asset's look in both.
 - Lighting is Canopy's own (one sun, ambient, gloss, fog from `ShaderVars.cs` globals), not Unity's Standard; emission is a surface output added after lighting.
 - Object-space surfaces (`s.objPos`) get `DisableBatching`; such meshes must not be marked Static.
